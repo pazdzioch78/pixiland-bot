@@ -1,9 +1,17 @@
 from datetime import datetime
-import json
 import time
 from colorama import Fore
 import requests
 import random
+from fake_useragent import UserAgent
+import asyncio
+import json
+import gzip
+import brotli
+import zlib
+import chardet
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 class pixiland:
@@ -29,6 +37,14 @@ class pixiland:
         self.query_list = self.load_query("query.txt")
         self.token = None
         self.config = self.load_config()
+        self.session = self.sessions()
+        self._original_requests = {
+            "get": requests.get,
+            "post": requests.post,
+            "put": requests.put,
+            "delete": requests.delete,
+        }
+        self.proxy_session = None
 
     def banner(self) -> None:
         """Displays the banner for the bot."""
@@ -46,6 +62,68 @@ class pixiland:
             + safe_message
             + Fore.RESET
         )
+    
+    def sessions(self):
+        session = requests.Session()
+        retries = Retry(total=3,
+                        backoff_factor=1,
+                        status_forcelist=[500, 502, 503, 504, 520])
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+        return session
+    
+    def decode_response(self, response):
+        """
+        Mendekode response dari server secara umum.
+
+        Parameter:
+            response: objek requests.Response
+
+        Mengembalikan:
+            - Jika Content-Type mengandung 'application/json', maka mengembalikan objek Python (dict atau list) hasil parsing JSON.
+            - Jika bukan JSON, maka mengembalikan string hasil decode.
+        """
+        # Ambil header
+        content_encoding = response.headers.get('Content-Encoding', '').lower()
+        content_type = response.headers.get('Content-Type', '').lower()
+
+        # Tentukan charset dari Content-Type, default ke utf-8
+        charset = 'utf-8'
+        if 'charset=' in content_type:
+            charset = content_type.split('charset=')[-1].split(';')[0].strip()
+
+        # Ambil data mentah
+        data = response.content
+
+        # Dekompresi jika perlu
+        try:
+            if content_encoding == 'gzip':
+                data = gzip.decompress(data)
+            elif content_encoding in ['br', 'brotli']:
+                data = brotli.decompress(data)
+            elif content_encoding in ['deflate', 'zlib']:
+                data = zlib.decompress(data)
+        except Exception:
+            # Jika dekompresi gagal, lanjutkan dengan data asli
+            pass
+
+        # Coba decode menggunakan charset yang didapat
+        try:
+            text = data.decode(charset)
+        except Exception:
+            # Fallback: deteksi encoding dengan chardet
+            detection = chardet.detect(data)
+            detected_encoding = detection.get("encoding", "utf-8")
+            text = data.decode(detected_encoding, errors='replace')
+
+        # Jika konten berupa JSON, kembalikan hasil parsing JSON
+        if 'application/json' in content_type:
+            try:
+                return json.loads(text)
+            except Exception:
+                # Jika parsing JSON gagal, kembalikan string hasil decode
+                return text
+        else:
+            return text
 
     def load_config(self) -> dict:
         """
@@ -169,24 +247,18 @@ class pixiland:
                 self.log(f"📄 Response content: {login_response.text}", Fore.RED)
 
     def task(self) -> None:
-        self.log("📝 Fetching tasks for kinds 0 to 4...", Fore.GREEN)
+        self.log("📝 Fetching tasks for kinds 0 to 6...", Fore.GREEN)
         all_tasks = []
 
-        # Loop through kinds 0 to 4 and fetch tasks individually.
-        for kind in range(0, 5):
+        # Fase 1: Ambil semua tugas dari kinds 0 hingga 5
+        for kind in range(0, 6):
             url = f"{self.BASE_URL}quests?kind={kind}"
             headers = {**self.HEADERS, "Authorization": self.token}
             self.log(f"📡 Requesting tasks for kind {kind}...", Fore.CYAN)
             try:
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, timeout=10)
                 response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError as e:
-                    self.log(
-                        f"❌ JSON decode error for tasks of kind {kind}: {e}", Fore.RED
-                    )
-                    continue
+                data = response.json()
                 if data.get("status") == 200:
                     tasks = data.get("data", [])
                     self.log(f"📋 Found {len(tasks)} tasks for kind {kind}.", Fore.CYAN)
@@ -197,32 +269,28 @@ class pixiland:
                     all_tasks.extend(tasks)
                 else:
                     message = data.get("message", "Unknown error")
-                    self.log(
-                        f"❌ Failed to fetch tasks for kind {kind}: {message}", Fore.RED
-                    )
+                    self.log(f"❌ Failed to fetch tasks for kind {kind}: {message}", Fore.RED)
+            except requests.exceptions.Timeout as e:
+                self.log(f"❌ Timeout error for tasks of kind {kind}: {e}", Fore.RED)
             except requests.exceptions.RequestException as e:
                 self.log(f"❌ Request error for tasks of kind {kind}: {e}", Fore.RED)
-            # Delay 2 seconds after each kind fetch
             time.sleep(2)
 
         if not all_tasks:
             self.log("ℹ️ No tasks found.", Fore.YELLOW)
             return
 
-        # Process each pending task
+        # Fase 2: Mulai tugas yang belum selesai (done == False)
+        started_tasks = []
         for task_item in all_tasks:
+            # Jika tugas sudah selesai, tidak perlu dimulai
             if task_item.get("done", False):
-                self.log(
-                    f"ℹ️ Task already done: {task_item.get('title', 'No Title')} (ID: {task_item.get('id', 'N/A')})",
-                    Fore.YELLOW,
-                )
                 continue
 
             quest_id = task_item.get("id")
             task_title = task_item.get("title", "No Title")
             self.log(f"🚀 Starting task: {task_title} (ID: {quest_id})", Fore.CYAN)
 
-            # Attempt to complete the task.
             complete_url = f"{self.BASE_URL}quests/complete"
             complete_payload = {"quest_id": quest_id}
             self.log("📡 Sending request to start the task...", Fore.CYAN)
@@ -231,17 +299,13 @@ class pixiland:
                     complete_url,
                     headers={**self.HEADERS, "Authorization": self.token},
                     json=complete_payload,
+                    timeout=10
                 )
-                # Consider success if HTTP status code is 200
                 if complete_response.status_code == 200:
-                    try:
-                        complete_data = complete_response.json()
-                    except ValueError as e:
-                        complete_data = {
-                            "status": 200
-                        }  # Assume success if status code is 200
+                    complete_data = complete_response.json()
                     if complete_data.get("status") == 200:
                         self.log("✅ Task started successfully!", Fore.GREEN)
+                        started_tasks.append(task_item)
                     else:
                         message = complete_data.get("message", "Unknown error")
                         self.log(f"❌ Failed to start task: {message}", Fore.RED)
@@ -252,25 +316,40 @@ class pixiland:
                     )
             except requests.exceptions.RequestException as e:
                 self.log(f"❌ Request error in complete task: {e}", Fore.RED)
+            time.sleep(2)
 
-            # Attempt to claim the reward for the task.
+        # Fase 3: Klaim reward untuk tugas yang belum diklaim
+        # Tugas yang akan diklaim adalah:
+        # - Tugas yang sudah selesai (done == True) dan belum diklaim (claimed == False)
+        # - Tugas yang berhasil dimulai (dari fase 2) dan belum diklaim
+        claimable_tasks = {}
+        for task in all_tasks:
+            if task.get("done", False) and not task.get("claimed", False):
+                claimable_tasks[task.get("id")] = task
+
+        for task in started_tasks:
+            # Pastikan tidak terjadi duplikasi
+            if not task.get("claimed", False):
+                claimable_tasks[task.get("id")] = task
+
+        if not claimable_tasks:
+            self.log("ℹ️ No claimable tasks found.", Fore.YELLOW)
+            return
+
+        for quest_id, task_item in claimable_tasks.items():
+            task_title = task_item.get("title", "No Title")
+            self.log(f"📡 Claiming reward for task: {task_title} (ID: {quest_id})", Fore.CYAN)
             claim_url = f"{self.BASE_URL}quests/rewards/claim"
             claim_payload = {"quest_id": quest_id}
-            self.log("📡 Sending request to claim the reward...", Fore.CYAN)
             try:
                 claim_response = requests.post(
                     claim_url,
                     headers={**self.HEADERS, "Authorization": self.token},
                     json=claim_payload,
+                    timeout=10
                 )
                 if claim_response.status_code == 200:
-                    try:
-                        claim_data = claim_response.json()
-                    except ValueError as e:
-                        self.log(f"❌ JSON decode error in claim reward: {e}", Fore.RED)
-                        claim_data = {
-                            "status": 200
-                        }  # Assume success if status code is 200
+                    claim_data = claim_response.json()
                     if claim_data.get("status") == 200:
                         self.log("🎉 Reward claimed successfully!", Fore.GREEN)
                     else:
@@ -283,8 +362,6 @@ class pixiland:
                     )
             except requests.exceptions.RequestException as e:
                 self.log(f"❌ Request error in claim reward: {e}", Fore.RED)
-
-            # Delay 2 seconds after processing each task
             time.sleep(2)
 
     def farming(self) -> None:
@@ -298,7 +375,7 @@ class pixiland:
             self.log("📡 Fetching user state...", Fore.CYAN)
             state_response = requests.get(state_url, headers=headers)
             state_response.raise_for_status()
-            state_data = state_response.json()
+            state_data = self.decode_response(state_response)
 
             if state_data.get("status") == 200:
                 user_data = state_data.get("data", {})
@@ -307,48 +384,26 @@ class pixiland:
                     self.log("ℹ️ No buildings found for farming.", Fore.YELLOW)
                     return
 
-                self.log(
-                    f"🏢 Found {len(buildings)} building(s) for farming.", Fore.CYAN
-                )
+                self.log(f"🏢 Found {len(buildings)} building(s) for farming.", Fore.CYAN)
                 for building in buildings:
                     building_id = building.get("id")
                     if not building_id:
-                        self.log(
-                            "❌ Found a building with no ID, skipping...", Fore.RED
-                        )
+                        self.log("❌ Found a building with no ID, skipping...", Fore.RED)
                         continue
 
-                    self.log(
-                        f"🏠 Claiming reward for building {building_id}...", Fore.CYAN
-                    )
+                    self.log(f"🏠 Claiming reward for building {building_id}...", Fore.CYAN)
                     claim_url = f"{self.BASE_URL}building/claim"
                     payload = {"id": building_id}
 
-                    claim_response = requests.put(
-                        claim_url, headers=headers, json=payload
-                    )
+                    claim_response = requests.put(claim_url, headers=headers, json=payload)
                     claim_response.raise_for_status()
-                    claim_data = claim_response.json()
+                    claim_data = self.decode_response(claim_response)
 
                     if claim_data.get("status") == 200:
-                        self.log(
-                            f"✅ Reward claimed for building {building_id}!", Fore.GREEN
-                        )
-                        updated_buildings = claim_data["data"].get("buildings", [])
-                        # Optionally log updated claim time for the current building
-                        for ub in updated_buildings:
-                            if ub.get("id") == building_id:
-                                last_claim = ub.get("last_claim_time", "N/A")
-                                self.log(
-                                    f"⏰ Updated last claim time for building {building_id}: {last_claim}",
-                                    Fore.CYAN,
-                                )
+                        self.log(f"✅ Reward claimed for building {building_id}!", Fore.GREEN)
                     else:
                         message = claim_data.get("message", "Unknown error")
-                        self.log(
-                            f"❌ Failed to claim reward for building {building_id}: {message}",
-                            Fore.RED,
-                        )
+                        self.log(f"❌ Failed to claim reward for building {building_id}: {message}", Fore.RED)
             else:
                 message = state_data.get("message", "Unknown error")
                 self.log(f"❌ Failed to fetch user state: {message}", Fore.RED)
@@ -361,7 +416,7 @@ class pixiland:
             self.log(f"❌ Key error: {e}", Fore.RED)
         except Exception as e:
             self.log(f"❌ Unexpected error: {e}", Fore.RED)
-
+            
     def dungeon(self) -> None:
         self.log("🗺️ Starting dungeon process...", Fore.GREEN)
         headers = {**self.HEADERS, "Authorization": self.token}
@@ -569,68 +624,86 @@ class pixiland:
             requests.put = self._original_requests["put"]
             requests.delete = self._original_requests["delete"]
 
+async def process_account(account, original_index, account_label, pix, config):
+    # Menampilkan informasi akun
+    display_account = account[:10] + "..." if len(account) > 10 else account
+    pix.log(f"👤 Processing {account_label}: {display_account}", Fore.YELLOW)
+    
+    # Override proxy jika diaktifkan
+    if config.get("proxy", False):
+        pix.override_requests()
+    else:
+        pix.log("[CONFIG] Proxy: ❌ Disabled", Fore.RED)
+    
+    # Login (fungsi blocking, dijalankan di thread terpisah) dengan menggunakan index asli (integer)
+    await asyncio.to_thread(pix.login, original_index)
+    
+    pix.log("🛠️ Starting task execution...", Fore.CYAN)
+    tasks_config = {
+        "task": "Effortlessly complete your daily tasks and level up! 🤖✅",
+        "farming": "Enjoy automatic resource farming for a bountiful harvest! 🌾🍀",
+        "dungeon": "Conquer epic dungeons and claim your rewards! 🏰⚔️"
+    }
+    
+    for task_key, task_name in tasks_config.items():
+        task_status = config.get(task_key, False)
+        color = Fore.YELLOW if task_status else Fore.RED
+        pix.log(f"[CONFIG] {task_name}: {'✅ Enabled' if task_status else '❌ Disabled'}", color)
+        if task_status:
+            pix.log(f"🔄 Executing {task_name}...", Fore.CYAN)
+            await asyncio.to_thread(getattr(pix, task_key))
+    
+    delay_switch = config.get("delay_account_switch", 10)
+    pix.log(f"➡️ Finished processing {account_label}. Waiting {Fore.WHITE}{delay_switch}{Fore.CYAN} seconds before next account.", Fore.CYAN)
+    await asyncio.sleep(delay_switch)
 
-if __name__ == "__main__":
-    pix = pixiland()
-    index = 0
-    max_index = len(pix.query_list)
+async def worker(worker_id, pix, config, queue):
+    """
+    Setiap worker akan mengambil satu akun dari antrian dan memprosesnya secara berurutan.
+    Worker tidak akan mengambil akun baru sebelum akun sebelumnya selesai diproses.
+    """
+    while True:
+        try:
+            original_index, account = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        account_label = f"Worker-{worker_id} Account-{original_index+1}"
+        await process_account(account, original_index, account_label, pix, config)
+        queue.task_done()
+    pix.log(f"Worker-{worker_id} finished processing all assigned accounts.", Fore.CYAN)
+
+async def main():
+    pix = pixiland() 
     config = pix.load_config()
+    all_accounts = pix.query_list
+    num_threads = config.get("thread", 1)  # Jumlah worker sesuai konfigurasi
+    
     if config.get("proxy", False):
         proxies = pix.load_proxies()
-
-    pix.log(
-        "🎉 [LIVEXORDS] === Welcome to Pixiland Automation === [LIVEXORDS]", Fore.YELLOW
-    )
-    pix.log(f"📂 Loaded {max_index} accounts from query list.", Fore.YELLOW)
-
+    
+    pix.log("🎉 [LIVEXORDS] === Welcome to Pixiland Automation === [LIVEXORDS]", Fore.YELLOW)
+    pix.log(f"📂 Loaded {len(all_accounts)} accounts from query list.", Fore.YELLOW)
+    
     while True:
-        current_account = pix.query_list[index]
-        display_account = (
-            current_account[:10] + "..."
-            if len(current_account) > 10
-            else current_account
-        )
+        # Buat queue baru dan masukkan semua akun (dengan index asli)
+        queue = asyncio.Queue()
+        for idx, account in enumerate(all_accounts):
+            queue.put_nowait((idx, account))
+        
+        # Buat task worker sesuai dengan jumlah thread yang diinginkan
+        workers = [asyncio.create_task(worker(i+1, pix, config, queue)) for i in range(num_threads)]
+        
+        # Tunggu hingga semua akun di queue telah diproses
+        await queue.join()
+        
+        # Opsional: batalkan task worker (agar tidak terjadi tumpang tindih)
+        for w in workers:
+            w.cancel()
+        
+        pix.log("🔁 All accounts processed. Restarting loop.", Fore.CYAN)
+        delay_loop = config.get("delay_loop", 30)
+        pix.log(f"⏳ Sleeping for {Fore.WHITE}{delay_loop}{Fore.CYAN} seconds before restarting.", Fore.CYAN)
+        await asyncio.sleep(delay_loop)
 
-        pix.log(
-            f"👤 [ACCOUNT] Processing account {index + 1}/{max_index}: {display_account}",
-            Fore.YELLOW,
-        )
-
-        if config.get("proxy", False):
-            pix.override_requests()
-        else:
-            pix.log("[CONFIG] Proxy: ❌ Disabled", Fore.RED)
-
-        pix.login(index)
-
-        pix.log("🛠️ Starting task execution...")
-        tasks = {
-            "task": "Effortlessly complete your daily tasks and level up! 🤖✅",
-            "farming": "Enjoy automatic resource farming for a bountiful harvest! 🌾🍀",
-            "dungeon": "Conquer epic dungeons and claim your rewards! 🏰⚔️"
-        }
-
-        for task_key, task_name in tasks.items():
-            task_status = config.get(task_key, False)
-            pix.log(
-                f"[CONFIG] {task_name}: {'✅ Enabled' if task_status else '❌ Disabled'}",
-                Fore.YELLOW if task_status else Fore.RED,
-            )
-
-            if task_status:
-                pix.log(f"🔄 Executing {task_name}...")
-                getattr(pix, task_key)()
-
-        if index == max_index - 1:
-            pix.log("🔁 All accounts processed. Restarting loop.")
-            pix.log(
-                f"⏳ Sleeping for {config.get('delay_loop', 30)} seconds before restarting."
-            )
-            time.sleep(config.get("delay_loop", 30))
-            index = 0
-        else:
-            pix.log(
-                f"➡️ Switching to the next account in {config.get('delay_account_switch', 10)} seconds."
-            )
-            time.sleep(config.get("delay_account_switch", 10))
-            index += 1
+if __name__ == "__main__":
+    asyncio.run(main())

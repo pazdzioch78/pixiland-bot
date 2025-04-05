@@ -8,5 +8,15 @@
             "kind": 1,
             "position": 5
         }
+    ],
+    "wood": [
+        {
+            "id": "01JP7WBQSTEN5PEJREYG4GDBB7"
+        }
+    ],
+    "wheat": [
+        {
+            "id": "01JP7WD63BADWWSK9F9X9QDNZC"
+        }
     ]
 }
