@@ -63,7 +63,7 @@ pixiland Bot is built with flexibility and efficiency in mind – it's here to h
 Before you start using pixiland Bot, make sure to register your account.  
 Click the link below to get started:
 
-[🔗 Register for pixiland Bot](https://t.me/pixiland_bot/play?startapp=FVT1GWKWFS)
+[🔗 Register for pixiland Bot](https://t.me/pixiland_bot/play?startapp=CANNKAQNLZ)
 
 ---
 
@@ -121,7 +121,7 @@ pip install -r requirements.txt
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/livexords-nw/pixiland-bot.git
+   git clone https://github.com/pazdzioch78/pixiland-bot.git
    ```
 
 2. **Navigate to the Project Folder**
