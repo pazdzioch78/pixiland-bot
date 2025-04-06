@@ -19,7 +19,7 @@ class pixiland:
     HEADERS = {
         "accept": "application/json, text/plain, */*",
         "accept-encoding": "gzip, deflate, br, zstd",
-        "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
+        "accept-language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "content-type": "application/json",
         "origin": "https://play.pixiland.app",
         "priority": "u=1, i",
@@ -604,57 +604,124 @@ class pixiland:
         self.proxy_session = requests.Session()
         return self.proxy_session
 
-    def override_requests(self):
-        """Override requests functions globally when proxy is enabled."""
-        if self.config.get("proxy", False):
-            self.log("[CONFIG] 🛡️ Proxy: ✅ Enabled", Fore.YELLOW)
-            proxies = self.load_proxies()
-            self.set_proxy_session(proxies)
+def override_requests(self):
+    """Override requests functions globally when proxy is enabled."""
+    if self.config.get("proxy", False):
+        self.log("[CONFIG] 🛡️ Proxy: ✅ Enabled", Fore.YELLOW)
+        proxies = self.load_proxies()
+        if not proxies:
+            self.log("⚠️ No proxies available. Using direct connection.", Fore.YELLOW)
+            return
+            
+        self.set_proxy_session(proxies)
+        
+        # Zapisz oryginalne funkcje, jeśli jeszcze nie zapisano
+        if not self._original_requests.get("get"):
+            self._original_requests = {
+                "get": requests.get,
+                "post": requests.post,
+                "put": requests.put,
+                "delete": requests.delete,
+            }
 
-            # Override request methods
-            requests.get = self.proxy_session.get
-            requests.post = self.proxy_session.post
-            requests.put = self.proxy_session.put
-            requests.delete = self.proxy_session.delete
-        else:
-            self.log("[CONFIG] proxy: ❌ Disabled", Fore.RED)
-            # Restore original functions if proxy is disabled
+        # Override request methods
+        requests.get = self.proxy_session.get
+        requests.post = self.proxy_session.post
+        requests.put = self.proxy_session.put
+        requests.delete = self.proxy_session.delete
+        self.log("✅ Request methods overridden with proxy session", Fore.GREEN)
+    else:
+        self.log("[CONFIG] proxy: ❌ Disabled", Fore.RED)
+        # Restore original functions if proxy is disabled and originals exist
+        if self._original_requests.get("get"):
             requests.get = self._original_requests["get"]
             requests.post = self._original_requests["post"]
             requests.put = self._original_requests["put"]
             requests.delete = self._original_requests["delete"]
+            self.log("✅ Request methods restored to originals", Fore.GREEN)
 
 async def process_account(account, original_index, account_label, pix, config):
-    # Menampilkan informasi akun
+    # Wyświetlanie informacji o koncie
     display_account = account[:10] + "..." if len(account) > 10 else account
-    pix.log(f"👤 Processing {account_label}: {display_account}", Fore.YELLOW)
+    pix.log(f"👤 Przetwarzanie {account_label}: {display_account}", Fore.YELLOW)
     
-    # Override proxy jika diaktifkan
-    if config.get("proxy", False):
-        pix.override_requests()
-    else:
-        pix.log("[CONFIG] Proxy: ❌ Disabled", Fore.RED)
+    # Zachowanie oryginalnych funkcji requests
+    original_get = requests.get
+    original_post = requests.post
+    original_put = requests.put
+    original_delete = requests.delete
     
-    # Login (fungsi blocking, dijalankan di thread terpisah) dengan menggunakan index asli (integer)
-    await asyncio.to_thread(pix.login, original_index)
-    
-    pix.log("🛠️ Starting task execution...", Fore.CYAN)
-    tasks_config = {
-        "task": "Effortlessly complete your daily tasks and level up! 🤖✅",
-        "farming": "Enjoy automatic resource farming for a bountiful harvest! 🌾🍀",
-        "dungeon": "Conquer epic dungeons and claim your rewards! 🏰⚔️"
-    }
-    
-    for task_key, task_name in tasks_config.items():
-        task_status = config.get(task_key, False)
-        color = Fore.YELLOW if task_status else Fore.RED
-        pix.log(f"[CONFIG] {task_name}: {'✅ Enabled' if task_status else '❌ Disabled'}", color)
-        if task_status:
-            pix.log(f"🔄 Executing {task_name}...", Fore.CYAN)
-            await asyncio.to_thread(getattr(pix, task_key))
+    try:
+        # Sprawdzanie i ustawianie proxy, jeśli włączone
+        if config.get("proxy", False):
+            proxies = pix.load_proxies()
+            if not proxies:
+                pix.log("⚠️ Brak dostępnych proxy. Używam bezpośredniego połączenia.", Fore.YELLOW)
+            else:
+                # Wybierz proxy, używając modulo aby nie wyjść poza zakres
+                proxy_index = original_index % len(proxies)
+                proxy_url = proxies[proxy_index]
+                
+                pix.log(f"🔄 Próba użycia proxy #{proxy_index}: {proxy_url} dla konta {account_label}", Fore.CYAN)
+                
+                # Utwórz sesję z wybranym proxy
+                pix.proxy_session = requests.Session()
+                pix.proxy_session.proxies = {"http": proxy_url, "https": proxy_url}
+                
+                # Testuj proxy
+                try:
+                    test_url = "https://httpbin.org/ip"
+                    response = pix.proxy_session.get(test_url, timeout=5)
+                    response.raise_for_status()
+                    origin_ip = response.json().get("origin", "Unknown IP")
+                    pix.log(f"✅ Proxy działa: {proxy_url} | IP: {origin_ip}", Fore.GREEN)
+                    
+                    # Zastąp globalne funkcje requests
+                    requests.get = pix.proxy_session.get
+                    requests.post = pix.proxy_session.post
+                    requests.put = pix.proxy_session.put
+                    requests.delete = pix.proxy_session.delete
+                except requests.RequestException as e:
+                    pix.log(f"❌ Proxy niedziałające: {proxy_url} | Błąd: {e}", Fore.RED)
+                    pix.log(f"⚠️ Używam bezpośredniego połączenia dla konta {account_label}", Fore.YELLOW)
+                    # Zachowaj oryginalne funkcje requests w przypadku błędu proxy
+        else:
+            pix.log("[CONFIG] Proxy: ❌ Wyłączone", Fore.RED)
+        
+        # Login (funkcja blokująca, uruchamiana w osobnym wątku) używając oryginalnego indeksu
+        await asyncio.to_thread(pix.login, original_index)
+        
+        # Sprawdź czy login się powiódł
+        if not pix.token:
+            pix.log(f"❌ Logowanie nie powiodło się dla konta {account_label}. Pomijam.", Fore.RED)
+            return
+        
+        pix.log("🛠️ Rozpoczynam wykonywanie zadań...", Fore.CYAN)
+        tasks_config = {
+            "task": "Automatyczne wykonywanie codziennych zadań! 🤖✅",
+            "farming": "Automatyczne zbieranie zasobów! 🌾🍀",
+            "dungeon": "Podbijanie lochów i zbieranie nagród! 🏰⚔️"
+        }
+        
+        for task_key, task_name in tasks_config.items():
+            task_status = config.get(task_key, False)
+            color = Fore.YELLOW if task_status else Fore.RED
+            pix.log(f"[CONFIG] {task_name}: {'✅ Włączone' if task_status else '❌ Wyłączone'}", color)
+            if task_status:
+                pix.log(f"🔄 Wykonuję {task_name}...", Fore.CYAN)
+                await asyncio.to_thread(getattr(pix, task_key))
+        
+    except Exception as e:
+        pix.log(f"❌ Błąd podczas przetwarzania konta {account_label}: {e}", Fore.RED)
+    finally:
+        # Zawsze przywracaj oryginalne funkcje requests
+        requests.get = original_get
+        requests.post = original_post
+        requests.put = original_put
+        requests.delete = original_delete
     
     delay_switch = config.get("delay_account_switch", 10)
-    pix.log(f"➡️ Finished processing {account_label}. Waiting {Fore.WHITE}{delay_switch}{Fore.CYAN} seconds before next account.", Fore.CYAN)
+    pix.log(f"➡️ Zakończono przetwarzanie {account_label}. Oczekiwanie {Fore.WHITE}{delay_switch}{Fore.CYAN} sekund przed następnym kontem.", Fore.CYAN)
     await asyncio.sleep(delay_switch)
 
 async def worker(worker_id, pix, config, queue):
