@@ -174,11 +174,7 @@ For contribution guidelines, please consider:
 - **Pull Requests:** Test your changes before submitting a PR.
 - **Feature Requests & Bugs:** Report and discuss via our Telegram group.
 
-<div align="center">
-  <a href="https://t.me/livexordsscript" target="_blank">
-    <img src="https://img.shields.io/badge/Join-Telegram%20Group-2CA5E0?logo=telegram&style=for-the-badge" height="25" alt="Telegram Group" />
-  </a>
-</div>
+
 
 ---
 
