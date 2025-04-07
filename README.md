@@ -7,20 +7,6 @@
 <strong>Boost your productivity with Pixiland Bot – your friendly automation tool that handles key tasks with ease!</strong>
 </p>
 
-<p align="center">
-<a href="https://github.com/livexords-nw/pixiland-bot/actions">
-<img src="https://img.shields.io/github/actions/workflow/status/livexords-nw/pixiland-bot/ci.yml?branch=main" alt="Build Status" />
-</a>
-<a href="https://github.com/livexords-nw/pixiland-bot/releases">
-<img src="https://img.shields.io/github/v/release/livexords-nw/pixiland-bot" alt="Latest Release" />
-</a>
-<a href="https://github.com/livexords-nw/pixiland-bot/blob/main/LICENSE">
-<img src="https://img.shields.io/github/license/livexords-nw/pixiland-bot" alt="License" />
-</a>
-<a href="https://t.me/livexordsscript">
-<img src="https://img.shields.io/badge/Telegram-Join%20Group-2CA5E0?logo=telegram&style=flat" alt="Telegram Group" />
-</a>
-</p>
 
 ---
 
